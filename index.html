@@ -356,8 +356,8 @@ async function saveToGithub(){
     const payload = buildPayload(m);
     await ghPut(path, JSON.stringify(payload, null, 2) + '\n', `查核意見：${S.data.rid}（手機查核台）`, existing && existing.sha);
     S.dirty.clear(); store.del('mv:' + S.data.rid);
-    say('已儲存到 GitHub。電腦那邊 pull 就會看到；「收工」時會自動配對歸檔。');
-    renderReports();
+    renderReports();   // 先重畫（重畫會清掉訊息列），再顯示成功訊息，否則使用者看不到
+    say('✅ 已儲存到 GitHub（' + new Date().toLocaleTimeString('zh-TW', {hour12:false}) + '）。電腦那邊 pull 就會看到；「收工」時會自動配對歸檔。');
   }catch(e){ say('儲存失敗：' + e.message + '（內容仍暫存在這支手機）'); }
 }
 function downloadJson(){
