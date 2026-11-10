@@ -84,7 +84,8 @@ const say = t => { $('msg').textContent = t; };
 // ---------- GitHub API ----------
 const encPath = p => p.split('/').map(encodeURIComponent).join('/');
 async function gh(path, opts = {}){
-  const res = await fetch(`https://api.github.com/repos/${cfg.repo}/${path}`, Object.assign({}, opts, {
+  // 路徑為空時不能有結尾斜線：GitHub 對 repos/owner/name/ 的回應沒有 CORS 標頭，瀏覽器會顯示 Failed to fetch
+  const res = await fetch(`https://api.github.com/repos/${cfg.repo}${path ? '/' + path : ''}`, Object.assign({}, opts, {
     headers: Object.assign({'Authorization':'Bearer '+cfg.token, 'Accept':'application/vnd.github+json', 'X-GitHub-Api-Version':'2022-11-28'}, opts.headers || {})
   }));
   return res;
