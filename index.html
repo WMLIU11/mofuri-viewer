@@ -25,6 +25,7 @@ main{max-width:760px;margin:auto;padding:14px 16px}
 .tags{display:flex;flex-wrap:wrap;gap:6px;font-size:12px}
 .tags span{background:var(--tag);border-radius:5px;padding:2px 8px}
 .tags .ledger{background:#e9e1f4;color:#4b3a6e}
+.tags .explore{background:#dff0ff;color:#1c4e80}
 h2{font-size:17px;margin:10px 0 4px}
 h3{font-size:14px;margin:12px 0 4px;color:var(--mute)}
 p{margin:6px 0}
@@ -78,6 +79,8 @@ const MODULES = {
 };
 const STATUS1 = [['unreviewed','未審核'],['useful','值得延伸'],['later','稍後再看'],['skip','略過']];
 const DECISION2 = ['未審核','想留言','稍後再看','不適合','已人工留言'];
+const REASONS = ['','不是設計需求','太擠','流量太低','沒興趣／不喜歡','已結案','其他'];   // 略過／不適合的原因（選填），供偏好學習區分
+const reasonSelect = (value, show) => `<label class="reasonwrap" ${show ? '' : 'hidden'}>略過原因（選填，幫 AI 分清楚為什麼）<select data-f="reason">${REASONS.map(v => `<option value="${v}" ${v===(value||'')?'selected':''}>${v||'（不填）'}</option>`).join('')}</select></label>`;
 
 const S = {tab:'1', reports:{1:[],2:[]}, current:{1:null,2:null}, data:null, reviews:{}, dirty:new Set(), mode:'', error:''};
 
@@ -164,18 +167,18 @@ async function loadReport(m){
 // ---------- 查核資料格式（與既有 HTML 匯出的 JSON 相同，收工腳本才配得到） ----------
 function normalizeReviews(m, raw){
   if(!raw) return {};
-  if(Array.isArray(raw)){ const o = {}; raw.forEach(r => { o[r.id] = {decision:r.decision, comment:r.comment, notes:r.notes}; }); return o; }
+  if(Array.isArray(raw)){ const o = {}; raw.forEach(r => { o[r.id] = {decision:r.decision, comment:r.comment, notes:r.notes, reason:r.reason}; }); return o; }
   return JSON.parse(JSON.stringify(raw));
 }
 function buildPayload(m){
   const now = new Date().toISOString();
   if(m === 1){
     const reviews = {};
-    for(const id of Object.keys(S.reviews)){ const r = S.reviews[id]; reviews[id] = {status:r.status || 'unreviewed', note:r.note || '', draft:r.draft || ''}; }
+    for(const id of Object.keys(S.reviews)){ const r = S.reviews[id]; reviews[id] = {status:r.status || 'unreviewed', note:r.note || '', draft:r.draft || '', reason:r.reason || ''}; }
     return {report_id:S.data.rid, exported_at:now, source:'手機查核台', reviews};
   }
   const reviews = S.data.items.filter(x => S.reviews[x.id]).map(x => { const r = S.reviews[x.id];
-    return {id:x.id, url:x.url, decision:r.decision || '未審核', comment:r.comment || '', notes:r.notes || ''}; });
+    return {id:x.id, url:x.url, decision:r.decision || '未審核', comment:r.comment || '', notes:r.notes || '', reason:r.reason || ''}; });
   return {module:'熱門留言', report_id:S.data.rid, exported_at:now, source:'手機查核台', reviews};
 }
 
@@ -195,7 +198,7 @@ function card1(x){
   const block = [['切入點',x.angle],['客觀依據',x.objective_basis],['偏好對照',x.preference_fit]].filter(a => a[1])
     .map(a => `<p><b>${a[0]}：</b>${esc(a[1])}</p>`).join('');
   return `<article class="card ${S.dirty.has(x.id)?'changed':''}" data-id="${esc(x.id)}">
-  <div class="tags"><span>${esc(x.platform)}</span><span>${esc(x.category)}</span>${x.ledger ? `<span class="ledger">${esc(x.ledger.badge||x.ledger.status)}</span>` : ''}</div>
+  <div class="tags"><span>${esc(x.platform)}</span><span>${esc(x.category)}</span>${x.explore ? '<span class="explore">探索</span>' : ''}${x.ledger ? `<span class="ledger">${esc(x.ledger.badge||x.ledger.status)}</span>` : ''}</div>
   <h2>${esc(x.title)}</h2>
   <p class="meta">${esc(x.published_display)} · ${esc(metricsText(x.metrics) || '未取得')}</p>
   <p>${esc(x.summary)}</p>
@@ -203,6 +206,7 @@ function card1(x){
   <details><summary>證據與判斷</summary><p>${esc(x.evidence)}</p><p><b>判斷：</b>${esc(x.decision)}</p></details>
   <p><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">開啟原文 ↗</a></p>
   <label>你的判斷<select data-f="status">${STATUS1.map(([v,t]) => `<option value="${v}" ${v===status?'selected':''}>${t}</option>`).join('')}</select></label>
+  ${reasonSelect(r.reason, status === 'skip')}
   <label>查核意見<textarea data-f="note" placeholder="喜歡的角度、想改的地方">${esc(r.note || '')}</textarea></label>
   <label>回覆草稿（可直接改）<textarea data-f="draft" rows="7">${esc(draft)}</textarea></label>
   ${warns}
@@ -219,7 +223,7 @@ function card2(x){
   const block = [['切入角度',x.reason],['客觀依據',x.objective_basis],['偏好對照',x.preference_fit]].filter(a => a[1])
     .map(a => `<p><b>${a[0]}：</b>${esc(a[1])}</p>`).join('');
   return `<article class="card ${S.dirty.has(x.id)?'changed':''}" data-id="${esc(x.id)}">
-  <div class="tags"><span>${esc(x.status)}</span><span>@${esc(x.account)}</span></div>
+  <div class="tags"><span>${esc(x.status)}</span><span>@${esc(x.account)}</span>${x.explore ? '<span class="explore">探索</span>' : ''}</div>
   <h2>${esc(x.title)}</h2>
   <p class="meta">${esc(x.age)} · ${esc(metricsText(x.metrics))}</p>
   <p>${esc(x.summary)}</p>
@@ -228,6 +232,7 @@ function card2(x){
   <p><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">開啟原文 ↗</a></p>
   ${drafts}
   <label>你的判斷<select data-f="decision">${DECISION2.map(v => `<option ${v===decision?'selected':''}>${v}</option>`).join('')}</select></label>
+  ${reasonSelect(r.reason, decision === '不適合')}
   <label>我要留的內容（採用草稿後可再改）<textarea data-f="comment" rows="5">${esc(r.comment || '')}</textarea></label>
   <div class="row"><button class="btn" data-act="copy" data-f="comment">複製我要留的內容</button></div>
   <label>查核意見／後續表現<textarea data-f="notes" placeholder="喜歡哪種口吻、留言後讚數與作者回覆">${esc(r.notes || '')}</textarea></label>
@@ -315,7 +320,13 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   const t = e.target;
   if(t.id === 'rsel'){ const m = Number(S.tab); S.current[m] = S.reports[m][Number(t.value)]; show(S.tab); return; }
-  if(t.matches && t.matches('select[data-f]')){ const art = t.closest('article'); setField(art.dataset.id, t.dataset.f, t.value); }
+  if(t.matches && t.matches('select[data-f]')){
+    const art = t.closest('article'); setField(art.dataset.id, t.dataset.f, t.value);
+    if(t.dataset.f === 'status' || t.dataset.f === 'decision'){
+      const wrap = art.querySelector('.reasonwrap');
+      if(wrap) wrap.hidden = !(t.value === 'skip' || t.value === '不適合');
+    }
+  }
 });
 document.addEventListener('click', async e => {
   const b = e.target.closest('button'); if(!b) return;
