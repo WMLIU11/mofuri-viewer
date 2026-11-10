@@ -1,0 +1,16 @@
+{
+  "name": "Mofuri 查核台",
+  "short_name": "查核台",
+  "description": "手機看報告、填查核意見、改回覆草稿",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#121a17",
+  "theme_color": "#236c58",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

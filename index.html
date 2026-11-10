@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#236c58">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <title>Mofuri 查核台</title>
 <style>
 :root{--bg:#f6f7f2;--card:#fff;--ink:#203e38;--mute:#6b7b71;--line:#dce5dc;--accent:#236c58;--warn:#b28a45;--warnbg:#f1e8d5;--tag:#e7efe9}
@@ -363,6 +367,7 @@ function downloadJson(){
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }
 show('1');
 </script>
 </body>
