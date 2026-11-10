@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Mofuri 查核台</title>
+<style>
+:root{--bg:#f6f7f2;--card:#fff;--ink:#203e38;--mute:#6b7b71;--line:#dce5dc;--accent:#236c58;--warn:#b28a45;--warnbg:#f1e8d5;--tag:#e7efe9}
+@media (prefers-color-scheme:dark){:root{--bg:#121a17;--card:#1b2622;--ink:#e3eee8;--mute:#9db0a6;--line:#2f3f38;--accent:#5bbf9f;--warn:#d9b56a;--warnbg:#3a3220;--tag:#27362f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.7 "Microsoft JhengHei",system-ui,sans-serif;padding-bottom:84px}
+header{position:sticky;top:0;z-index:5;background:var(--accent);color:#fff;padding:10px 16px}
+header h1{font-size:18px;margin:0 0 6px}
+nav{display:flex;gap:8px;overflow-x:auto}
+nav button{flex:none;border:1px solid rgba(255,255,255,.5);background:transparent;color:#fff;border-radius:999px;padding:6px 14px;font:inherit;font-size:14px}
+nav button.on{background:#fff;color:var(--accent);font-weight:700}
+main{max-width:760px;margin:auto;padding:14px 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin:0 0 14px;overflow-wrap:anywhere}
+.tags{display:flex;flex-wrap:wrap;gap:6px;font-size:12px}
+.tags span{background:var(--tag);border-radius:5px;padding:2px 8px}
+.tags .ledger{background:#e9e1f4;color:#4b3a6e}
+h2{font-size:17px;margin:10px 0 4px}
+h3{font-size:14px;margin:12px 0 4px;color:var(--mute)}
+p{margin:6px 0}
+.meta{font-size:13px;color:var(--mute)}
+.note{background:var(--warnbg);border-left:4px solid var(--warn);border-radius:8px;padding:8px 12px;margin:10px 0;font-size:14px}
+a{color:var(--accent);text-underline-offset:3px}
+select,textarea,input{width:100%;font:inherit;font-size:16px;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px}
+textarea{min-height:96px;resize:vertical}
+label{display:block;font-size:13px;color:var(--mute);margin-top:10px}
+button.btn{font:inherit;font-size:15px;min-height:44px;padding:0 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.draft{border:1px dashed var(--line);border-radius:10px;padding:8px 12px;margin:8px 0;font-size:15px;white-space:pre-wrap}
+.draft b{font-size:12px;color:var(--mute);display:block}
+details{margin:8px 0;font-size:14px}
+summary{cursor:pointer;color:var(--mute)}
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:10px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;z-index:6}
+.bar .msg{flex:1 1 100%;font-size:13px;color:var(--mute);margin:0}
+.changed{border-color:var(--accent)}
+.warn{color:var(--warn);font-size:13px}
+ol{padding-left:20px}
+code{background:var(--tag);padding:1px 5px;border-radius:4px;font-size:13px}
+</style>
+</head>
+<body>
+<header><h1>Mofuri 查核台</h1><nav id="tabs"></nav></header>
+<main id="app"></main>
+<div class="bar" id="bar" hidden>
+  <button class="btn primary" id="save">儲存到 GitHub</button>
+  <button class="btn" id="download">下載 JSON</button>
+  <p class="msg" id="msg" role="status"></p>
+</div>
+<script>
+'use strict';
+// ---------- 設定與儲存（瀏覽器 localStorage，失敗時退回記憶體） ----------
+const CFG_KEY = 'mofuri-viewer-cfg';
+const memory = {};
+const store = {
+  get(k){ try{ return localStorage.getItem(k); }catch(e){ return memory[k] ?? null; } },
+  set(k,v){ try{ localStorage.setItem(k,v); }catch(e){ memory[k]=v; } },
+  del(k){ try{ localStorage.removeItem(k); }catch(e){ delete memory[k]; } }
+};
+const cfg = Object.assign({repo:'', branch:'main', token:''}, JSON.parse(store.get(CFG_KEY) || '{}'));
+const saveCfg = () => store.set(CFG_KEY, JSON.stringify(cfg));
+
+const MODULES = {
+  1:{name:'設計類貼文', dir:'1.設計類貼文/報告&意見', snap:/^Mofuri話題候選報告_.*_資料快照\.json$/,
+     reviewFile:id=>`mofuri-review-${id}.json`},
+  2:{name:'熱門留言', dir:'2.熱門趨勢留言/報告&意見', snap:/^報告快照_.*\.json$/,
+     reviewFile:id=>`mofuri-comments-review-${id}.json`}
+};
+const STATUS1 = [['unreviewed','未審核'],['useful','值得延伸'],['later','稍後再看'],['skip','略過']];
+const DECISION2 = ['未審核','想留言','稍後再看','不適合','已人工留言'];
+
+const S = {tab:'1', reports:{1:[],2:[]}, current:{1:null,2:null}, data:null, reviews:{}, dirty:new Set(), mode:'', error:''};
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const $ = id => document.getElementById(id);
+const say = t => { $('msg').textContent = t; };
+
+// ---------- GitHub API ----------
+const encPath = p => p.split('/').map(encodeURIComponent).join('/');
+async function gh(path, opts = {}){
+  const res = await fetch(`https://api.github.com/repos/${cfg.repo}/${path}`, Object.assign({}, opts, {
+    headers: Object.assign({'Authorization':'Bearer '+cfg.token, 'Accept':'application/vnd.github+json', 'X-GitHub-Api-Version':'2022-11-28'}, opts.headers || {})
+  }));
+  return res;
+}
+const b64enc = text => { const bytes = new TextEncoder().encode(text); let bin = ''; for(let i=0;i<bytes.length;i+=8192) bin += String.fromCharCode.apply(null, bytes.subarray(i,i+8192)); return btoa(bin); };
+const b64dec = b64 => { const bin = atob(b64.replace(/\s/g,'')); const bytes = Uint8Array.from(bin, c => c.charCodeAt(0)); return new TextDecoder().decode(bytes); };
+
+async function ghList(dir){
+  const res = await gh(`contents/${encPath(dir)}?ref=${encodeURIComponent(cfg.branch)}`);
+  if(res.status === 404) return [];
+  if(!res.ok) throw new Error(`讀取 ${dir} 失敗（HTTP ${res.status}）`);
+  return res.json();
+}
+async function ghGet(path){            // 回傳 {text, sha} 或 null
+  const res = await gh(`contents/${encPath(path)}?ref=${encodeURIComponent(cfg.branch)}`);
+  if(res.status === 404) return null;
+  if(!res.ok) throw new Error(`讀取檔案失敗（HTTP ${res.status}）`);
+  const meta = await res.json();
+  if(meta.content) return {text:b64dec(meta.content), sha:meta.sha};
+  const raw = await gh(`contents/${encPath(path)}?ref=${encodeURIComponent(cfg.branch)}`, {headers:{'Accept':'application/vnd.github.raw+json'}});
+  return {text:await raw.text(), sha:meta.sha};
+}
+async function ghPut(path, text, message, sha){
+  const body = {message, content:b64enc(text), branch:cfg.branch};
+  if(sha) body.sha = sha;
+  const res = await gh(`contents/${encPath(path)}`, {method:'PUT', body:JSON.stringify(body)});
+  if(!res.ok){ const t = await res.text(); throw new Error(`寫入失敗（HTTP ${res.status}）：${t.slice(0,160)}`); }
+  return res.json();
+}
+
+// ---------- 資料來源：有 token 讀 GitHub，沒有就讀同資料夾的示範資料 ----------
+const useGithub = () => !!(cfg.token && cfg.repo);
+
+async function loadReportLists(){
+  S.error = '';
+  if(useGithub()){
+    S.mode = 'github';
+    for(const m of [1,2]){
+      const list = await ghList(MODULES[m].dir + '/資料庫');
+      S.reports[m] = list.filter(f => f.type === 'file' && MODULES[m].snap.test(f.name))
+        .map(f => ({name:f.name, path:f.path})).sort((a,b) => b.name.localeCompare(a.name)).slice(0,8);
+    }
+  } else {
+    S.mode = 'demo';
+    const res = await fetch('data/manifest.json');
+    if(!res.ok) throw new Error('尚未設定 GitHub，也沒有示範資料。請到「設定」填入倉庫與 token。');
+    const all = await res.json();
+    for(const m of [1,2]) S.reports[m] = all.filter(x => x.module === m).sort((a,b) => b.name.localeCompare(a.name));
+  }
+  for(const m of [1,2]) S.current[m] = S.reports[m][0] || null;
+}
+
+async function loadReport(m){
+  const entry = S.current[m];
+  S.data = null; S.reviews = {}; S.dirty = new Set();
+  if(!entry) return;
+  let text;
+  if(S.mode === 'github'){ const f = await ghGet(entry.path); text = f && f.text; }
+  else { const r = await fetch(entry.path); text = r.ok ? await r.text() : null; }
+  if(!text) throw new Error('讀不到這份報告的資料。');
+  S.data = JSON.parse(text);
+  S.data.rid = m === 2 ? (S.data.generated_report_id || S.data.report_id) : S.data.report_id;
+  // 已存的查核（GitHub 上的未歸檔批次）→ 再疊上這支手機本機暫存
+  if(S.mode === 'github'){
+    const f = await ghGet(`${MODULES[m].dir}/查核意見/${MODULES[m].reviewFile(S.data.rid)}`);
+    if(f){ S.reviews = normalizeReviews(m, JSON.parse(f.text).reviews); S.sha = f.sha; } else S.sha = null;
+  }
+  const local = JSON.parse(store.get('mv:' + S.data.rid) || '{}');
+  for(const id of Object.keys(local)){ S.reviews[id] = Object.assign({}, S.reviews[id], local[id]); S.dirty.add(id); }
+}
+
+// ---------- 查核資料格式（與既有 HTML 匯出的 JSON 相同，收工腳本才配得到） ----------
+function normalizeReviews(m, raw){
+  if(!raw) return {};
+  if(Array.isArray(raw)){ const o = {}; raw.forEach(r => { o[r.id] = {decision:r.decision, comment:r.comment, notes:r.notes}; }); return o; }
+  return JSON.parse(JSON.stringify(raw));
+}
+function buildPayload(m){
+  const now = new Date().toISOString();
+  if(m === 1){
+    const reviews = {};
+    for(const id of Object.keys(S.reviews)){ const r = S.reviews[id]; reviews[id] = {status:r.status || 'unreviewed', note:r.note || '', draft:r.draft || ''}; }
+    return {report_id:S.data.rid, exported_at:now, source:'手機查核台', reviews};
+  }
+  const reviews = S.data.items.filter(x => S.reviews[x.id]).map(x => { const r = S.reviews[x.id];
+    return {id:x.id, url:x.url, decision:r.decision || '未審核', comment:r.comment || '', notes:r.notes || ''}; });
+  return {module:'熱門留言', report_id:S.data.rid, exported_at:now, source:'手機查核台', reviews};
+}
+
+// ---------- 畫面 ----------
+function metricsText(m){
+  if(!m) return '';
+  if(typeof m === 'string') return m;
+  return Object.entries(m).map(([k,v]) => `${k} ${v}`).join('／');
+}
+const rev = id => S.reviews[id] || {};
+
+function card1(x){
+  const r = rev(x.id);
+  const status = r.status || 'unreviewed';
+  const draft = r.draft ?? x.reply_draft ?? '';
+  const warns = (x.reply_warnings || []).map(w => `<div class="warn">⚠ ${esc(w)}</div>`).join('');
+  const block = [['切入點',x.angle],['客觀依據',x.objective_basis],['偏好對照',x.preference_fit]].filter(a => a[1])
+    .map(a => `<p><b>${a[0]}：</b>${esc(a[1])}</p>`).join('');
+  return `<article class="card ${S.dirty.has(x.id)?'changed':''}" data-id="${esc(x.id)}">
+  <div class="tags"><span>${esc(x.platform)}</span><span>${esc(x.category)}</span>${x.ledger ? `<span class="ledger">${esc(x.ledger.badge||x.ledger.status)}</span>` : ''}</div>
+  <h2>${esc(x.title)}</h2>
+  <p class="meta">${esc(x.published_display)} · ${esc(metricsText(x.metrics) || '未取得')}</p>
+  <p>${esc(x.summary)}</p>
+  ${block ? `<div class="note">${block}</div>` : ''}
+  <details><summary>證據與判斷</summary><p>${esc(x.evidence)}</p><p><b>判斷：</b>${esc(x.decision)}</p></details>
+  <p><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">開啟原文 ↗</a></p>
+  <label>你的判斷<select data-f="status">${STATUS1.map(([v,t]) => `<option value="${v}" ${v===status?'selected':''}>${t}</option>`).join('')}</select></label>
+  <label>查核意見<textarea data-f="note" placeholder="喜歡的角度、想改的地方">${esc(r.note || '')}</textarea></label>
+  <label>回覆草稿（可直接改）<textarea data-f="draft" rows="7">${esc(draft)}</textarea></label>
+  ${warns}
+  <div class="row"><button class="btn" data-act="copy" data-f="draft">複製草稿</button>${x.reply_draft ? '<button class="btn" data-act="reset">還原預設草稿</button>' : ''}</div>
+</article>`;
+}
+
+function card2(x){
+  const r = rev(x.id);
+  const decision = r.decision || '未審核';
+  const labels = x.draft_labels || [];
+  const drafts = (x.drafts || []).map((d,i) => `<div class="draft"><b>草稿${i+1}${labels[i] ? '・'+esc(labels[i]) : ''}</b>${esc(d)}
+    <div class="row"><button class="btn" data-act="use" data-i="${i}">採用</button><button class="btn" data-act="copytext" data-i="${i}">複製</button></div></div>`).join('');
+  const block = [['切入角度',x.reason],['客觀依據',x.objective_basis],['偏好對照',x.preference_fit]].filter(a => a[1])
+    .map(a => `<p><b>${a[0]}：</b>${esc(a[1])}</p>`).join('');
+  return `<article class="card ${S.dirty.has(x.id)?'changed':''}" data-id="${esc(x.id)}">
+  <div class="tags"><span>${esc(x.status)}</span><span>@${esc(x.account)}</span></div>
+  <h2>${esc(x.title)}</h2>
+  <p class="meta">${esc(x.age)} · ${esc(metricsText(x.metrics))}</p>
+  <p>${esc(x.summary)}</p>
+  ${block ? `<div class="note">${block}</div>` : ''}
+  <details><summary>證據與注意事項</summary><p>${esc(x.evidence)}</p><p><b>確認：</b>${esc(x.check)}</p></details>
+  <p><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">開啟原文 ↗</a></p>
+  ${drafts}
+  <label>你的判斷<select data-f="decision">${DECISION2.map(v => `<option ${v===decision?'selected':''}>${v}</option>`).join('')}</select></label>
+  <label>我要留的內容（採用草稿後可再改）<textarea data-f="comment" rows="5">${esc(r.comment || '')}</textarea></label>
+  <div class="row"><button class="btn" data-act="copy" data-f="comment">複製我要留的內容</button></div>
+  <label>查核意見／後續表現<textarea data-f="notes" placeholder="喜歡哪種口吻、留言後讚數與作者回覆">${esc(r.notes || '')}</textarea></label>
+</article>`;
+}
+
+function renderTabs(){
+  const tabs = [['1','設計類貼文'],['2','熱門留言'],['s','設定']];
+  $('tabs').innerHTML = tabs.map(([k,t]) => `<button data-tab="${k}" class="${S.tab===k?'on':''}">${t}</button>`).join('');
+}
+
+function renderReports(){
+  const m = Number(S.tab);
+  const list = S.reports[m];
+  const sel = list.length ? `<label>報告<select id="rsel">${list.map((e,i) => `<option value="${i}" ${S.current[m]===e?'selected':''}>${esc(e.name.replace(/_資料快照\.json$|\.json$/,''))}</option>`).join('')}</select></label>` : '';
+  const banner = S.mode === 'demo' ? '<div class="note">示範模式：讀的是同資料夾的示範資料，儲存只會留在這支手機。要寫回倉庫請到「設定」填入 GitHub。</div>' : '';
+  if(!S.data){ $('app').innerHTML = banner + sel + `<p class="meta">${list.length ? '載入中…' : '這個模組目前沒有報告。'}</p>`; return; }
+  const cards = S.data.items.filter(x => x.category !== 'excluded').map(m === 1 ? card1 : card2).join('');
+  const intro = m === 1 ? (S.data.notice || '') : (S.data.selection_summary || '');
+  $('app').innerHTML = banner + sel + (intro ? `<div class="note">${esc(intro)}</div>` : '') + cards;
+  $('bar').hidden = false;
+  updateBar();
+}
+
+function renderSettings(){
+  $('bar').hidden = true;
+  $('app').innerHTML = `<div class="card">
+  <h2>連線到你的 GitHub 倉庫</h2>
+  <label>倉庫（擁有者/名稱）<input id="c_repo" value="${esc(cfg.repo)}" placeholder="owner/repo" autocapitalize="off" autocorrect="off"></label>
+  <label>分支<input id="c_branch" value="${esc(cfg.branch)}"></label>
+  <label>Fine-grained token（只存在這支手機的瀏覽器）<input id="c_token" type="password" value="${esc(cfg.token)}" placeholder="github_pat_…" autocomplete="off"></label>
+  <div class="row"><button class="btn primary" id="c_save">儲存設定</button><button class="btn" id="c_test">測試連線</button><button class="btn" id="c_clear">清除 token</button></div>
+  <p class="meta" id="c_msg"></p>
+  <details open><summary>怎麼建立 token（免費）</summary><ol>
+  <li>GitHub 網站 → 右上頭像 → Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b> → Generate new token。</li>
+  <li>Repository access 選 <b>Only select repositories</b>，只選這個倉庫。</li>
+  <li>Permissions → Repository permissions → <b>Contents：Read and write</b>（其他都不要）。</li>
+  <li>有效期限建議 90 天，到期再換一支。</li>
+  <li>複製 token 貼到上面。token 不會傳到 GitHub 以外的地方，也不會寫進倉庫。手機遺失時到 GitHub 把這支 token 撤銷即可。</li></ol></details>
+  </div>`;
+}
+
+function updateBar(){
+  const n = S.dirty.size;
+  $('save').textContent = n ? `儲存到 GitHub（${n} 筆已改）` : '儲存到 GitHub';
+  $('save').disabled = S.mode !== 'github';
+  say(S.mode === 'github' ? (n ? '已改的內容先暫存在這支手機，按「儲存」才會寫回倉庫。' : '') : '示範模式不能寫回 GitHub，可用「下載 JSON」。');
+}
+
+async function show(tab){
+  S.tab = tab; renderTabs();
+  if(tab === 's'){ renderSettings(); return; }
+  const m = Number(tab);
+  try{
+    if(!S.reports[1].length && !S.reports[2].length && !S.error) await loadReportLists();
+    S.data = null; renderReports();
+    await loadReport(m); renderReports();
+  }catch(e){
+    S.error = e.message; $('bar').hidden = true;
+    if(!useGithub()){ S.tab = 's'; renderTabs(); renderSettings(); $('c_msg').textContent = e.message; return; }
+    $('app').innerHTML = `<div class="note">${esc(e.message)}</div>`;
+  }
+}
+
+// ---------- 互動 ----------
+function setField(id, f, value){
+  const m = Number(S.tab);
+  S.reviews[id] = Object.assign({}, S.reviews[id], {[f]: value});
+  S.dirty.add(id);
+  const local = JSON.parse(store.get('mv:' + S.data.rid) || '{}');
+  local[id] = S.reviews[id];
+  store.set('mv:' + S.data.rid, JSON.stringify(local));
+  const el = document.querySelector(`article[data-id="${CSS.escape(id)}"]`); if(el) el.classList.add('changed');
+  updateBar();
+}
+async function copyText(t){
+  try{ await navigator.clipboard.writeText(t); say('已複製'); }
+  catch(e){ const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); say('已複製'); }catch(_){ say('無法自動複製，請長按文字手動複製'); } ta.remove(); }
+}
+document.addEventListener('input', e => {
+  const t = e.target; if(!t.dataset || !t.dataset.f) return;
+  const art = t.closest('article'); if(!art) return;
+  setField(art.dataset.id, t.dataset.f, t.value);
+});
+document.addEventListener('change', e => {
+  const t = e.target;
+  if(t.id === 'rsel'){ const m = Number(S.tab); S.current[m] = S.reports[m][Number(t.value)]; show(S.tab); return; }
+  if(t.matches && t.matches('select[data-f]')){ const art = t.closest('article'); setField(art.dataset.id, t.dataset.f, t.value); }
+});
+document.addEventListener('click', async e => {
+  const b = e.target.closest('button'); if(!b) return;
+  if(b.dataset.tab){ show(b.dataset.tab); return; }
+  const art = b.closest('article');
+  const act = b.dataset.act;
+  if(act && art){
+    const id = art.dataset.id; const item = S.data.items.find(x => x.id === id);
+    if(act === 'copy'){ copyText(art.querySelector(`textarea[data-f="${b.dataset.f}"]`).value); }
+    else if(act === 'copytext'){ copyText(item.drafts[Number(b.dataset.i)]); }
+    else if(act === 'use'){ const v = item.drafts[Number(b.dataset.i)]; setField(id, 'comment', v); art.querySelector('textarea[data-f="comment"]').value = v; say('已放入「我要留的內容」'); }
+    else if(act === 'reset'){ setField(id, 'draft', item.reply_draft || ''); art.querySelector('textarea[data-f="draft"]').value = item.reply_draft || ''; say('已還原預設草稿'); }
+    return;
+  }
+  if(b.id === 'c_save'){ cfg.repo = $('c_repo').value.trim(); cfg.branch = $('c_branch').value.trim() || 'main'; cfg.token = $('c_token').value.trim(); saveCfg(); S.reports = {1:[],2:[]}; S.error = ''; $('c_msg').textContent = '已儲存。回到「設計類貼文」分頁即可載入。'; }
+  else if(b.id === 'c_clear'){ cfg.token = ''; saveCfg(); $('c_token').value = ''; S.reports = {1:[],2:[]}; $('c_msg').textContent = 'token 已從這支手機清除。'; }
+  else if(b.id === 'c_test'){
+    cfg.repo = $('c_repo').value.trim(); cfg.token = $('c_token').value.trim(); $('c_msg').textContent = '測試中…';
+    try{ const r = await gh(''); const j = await r.json();
+      $('c_msg').textContent = r.ok ? `連線成功：${j.full_name}（${j.private ? '私人' : '公開'}倉庫，${j.permissions && j.permissions.push ? '可寫入' : '唯讀，無法儲存查核'}）` : `連線失敗（HTTP ${r.status}）：${j.message || ''}`;
+    }catch(err){ $('c_msg').textContent = '連線失敗：' + err.message; }
+  }
+  else if(b.id === 'save'){ await saveToGithub(); }
+  else if(b.id === 'download'){ downloadJson(); }
+});
+
+async function saveToGithub(){
+  const m = Number(S.tab);
+  if(!S.data || !S.dirty.size){ say('沒有需要儲存的變更。'); return; }
+  say('儲存中…');
+  try{
+    const path = `${MODULES[m].dir}/查核意見/${MODULES[m].reviewFile(S.data.rid)}`;
+    const existing = await ghGet(path);                 // 手機與電腦可能都改過：先讀再合併，這邊改的優先
+    if(existing){
+      const old = normalizeReviews(m, JSON.parse(existing.text).reviews);
+      for(const id of Object.keys(old)) if(!S.reviews[id]) S.reviews[id] = old[id];
+    }
+    const payload = buildPayload(m);
+    await ghPut(path, JSON.stringify(payload, null, 2) + '\n', `查核意見：${S.data.rid}（手機查核台）`, existing && existing.sha);
+    S.dirty.clear(); store.del('mv:' + S.data.rid);
+    say('已儲存到 GitHub。電腦那邊 pull 就會看到；「收工」時會自動配對歸檔。');
+    renderReports();
+  }catch(e){ say('儲存失敗：' + e.message + '（內容仍暫存在這支手機）'); }
+}
+function downloadJson(){
+  const m = Number(S.tab); if(!S.data) return;
+  const blob = new Blob([JSON.stringify(buildPayload(m), null, 2)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = MODULES[m].reviewFile(S.data.rid); a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+show('1');
+</script>
+</body>
+</html>
