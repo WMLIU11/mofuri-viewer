@@ -48,6 +48,12 @@ summary{cursor:pointer;color:var(--mute)}
 .warn{color:var(--warn);font-size:13px}
 ol{padding-left:20px}
 code{background:var(--tag);padding:1px 5px;border-radius:4px;font-size:13px}
+.sendbox{border:2px solid var(--accent)}
+.sendbox ol{margin:6px 0;font-size:14px}
+.sendtoggle{display:flex;align-items:center;gap:10px;margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;color:var(--ink)}
+.sendtoggle input{width:22px;height:22px;flex:none}
+.sendtoggle.on{border-color:var(--accent);background:var(--tag);font-weight:700}
+.tags .sent{background:var(--accent);color:#fff}
 </style>
 </head>
 <body>
@@ -167,7 +173,7 @@ async function loadReport(m){
 // ---------- 查核資料格式（與既有 HTML 匯出的 JSON 相同，收工腳本才配得到） ----------
 function normalizeReviews(m, raw){
   if(!raw) return {};
-  if(Array.isArray(raw)){ const o = {}; raw.forEach(r => { o[r.id] = {decision:r.decision, comment:r.comment, notes:r.notes, reason:r.reason}; }); return o; }
+  if(Array.isArray(raw)){ const o = {}; raw.forEach(r => { o[r.id] = {decision:r.decision, comment:r.comment, notes:r.notes, reason:r.reason, send:!!r.send}; }); return o; }
   return JSON.parse(JSON.stringify(raw));
 }
 function buildPayload(m){
@@ -178,7 +184,7 @@ function buildPayload(m){
     return {report_id:S.data.rid, exported_at:now, source:'手機查核台', reviews};
   }
   const reviews = S.data.items.filter(x => S.reviews[x.id]).map(x => { const r = S.reviews[x.id];
-    return {id:x.id, url:x.url, decision:r.decision || '未審核', comment:r.comment || '', notes:r.notes || '', reason:r.reason || ''}; });
+    return {id:x.id, url:x.url, decision:r.decision || '未審核', comment:r.comment || '', notes:r.notes || '', reason:r.reason || '', send:!!r.send}; });
   return {module:'熱門留言', report_id:S.data.rid, exported_at:now, source:'手機查核台', reviews};
 }
 
@@ -223,7 +229,7 @@ function card2(x){
   const block = [['切入角度',x.reason],['客觀依據',x.objective_basis],['偏好對照',x.preference_fit]].filter(a => a[1])
     .map(a => `<p><b>${a[0]}：</b>${esc(a[1])}</p>`).join('');
   return `<article class="card ${S.dirty.has(x.id)?'changed':''}" data-id="${esc(x.id)}">
-  <div class="tags"><span>${esc(x.status)}</span><span>@${esc(x.account)}</span>${x.explore ? '<span class="explore">探索</span>' : ''}</div>
+  <div class="tags"><span>${esc(x.status)}</span><span>@${esc(x.account)}</span>${x.explore ? '<span class="explore">探索</span>' : ''}${decision === '已人工留言' ? '<span class="sent">已送出</span>' : ''}</div>
   <h2>${esc(x.title)}</h2>
   <p class="meta">${esc(x.age)} · ${esc(metricsText(x.metrics))}</p>
   <p>${esc(x.summary)}</p>
@@ -235,6 +241,7 @@ function card2(x){
   ${reasonSelect(r.reason, decision === '不適合')}
   <label>我要留的內容（採用草稿後可再改）<textarea data-f="comment" rows="5">${esc(r.comment || '')}</textarea></label>
   <div class="row"><button class="btn" data-act="copy" data-f="comment">複製我要留的內容</button></div>
+  ${decision === '已人工留言' ? '' : `<label class="sendtoggle ${r.send ? 'on' : ''}"><input type="checkbox" data-act="send" ${r.send ? 'checked' : ''}>要送出（送「我要留的內容」這個版本）</label>`}
   <label>查核意見／後續表現<textarea data-f="notes" placeholder="喜歡哪種口吻、留言後讚數與作者回覆">${esc(r.notes || '')}</textarea></label>
 </article>`;
 }
@@ -252,9 +259,34 @@ function renderReports(){
   if(!S.data){ $('app').innerHTML = banner + sel + `<p class="meta">${list.length ? '載入中…' : '這個模組目前沒有報告。'}</p>`; return; }
   const cards = S.data.items.filter(x => x.category !== 'excluded').map(m === 1 ? card1 : card2).join('');
   const intro = m === 1 ? (S.data.notice || '') : (S.data.selection_summary || '');
-  $('app').innerHTML = banner + sel + (intro ? `<div class="note">${esc(intro)}</div>` : '') + cards;
+  $('app').innerHTML = banner + sel + (m === 2 ? sendBox() : '') + (intro ? `<div class="note">${esc(intro)}</div>` : '') + cards;
   $('bar').hidden = false;
   updateBar();
+}
+
+// ---------- 待送出清單（只是你的勾選；真正送出要在 Claude 對話裡點選確認） ----------
+const sendQueue = () => S.data.items.filter(x => { const r = rev(x.id); return r.send && (r.comment || '').trim() && r.decision !== '已人工留言'; });
+function sendBox(){
+  const q = sendQueue();
+  if(!q.length) return '<div id="sendbox"><p class="meta">勾選卡片下方的「要送出」，這裡會列出待送出清單。</p></div>';
+  const list = q.map(x => `<li><b>${esc(x.title)}</b><br>${esc((rev(x.id).comment || '').trim())}</li>`).join('');
+  return `<div id="sendbox" class="card sendbox"><h2>待送出 ${q.length} 則</h2><ol>${list}</ol>
+  <p class="meta">按「去送出」會先儲存到 GitHub，再複製「送出留言」。到 Claude App 的 Mofuri 家用對話貼上，我會列出可點選的清單，你點要送的幾則就送出。一輪最多 4 則。</p>
+  <div class="row"><button class="btn primary" id="gosend">去送出（${q.length}）</button></div></div>`;
+}
+async function goSend(){
+  if(S.mode !== 'github'){ say('示範模式不能送出，請先到「設定」連線 GitHub。'); return; }
+  if(sendQueue().length > 4) say('超過 4 則：這一輪我只會列前 4 則，其餘下一輪再送。');
+  if(S.dirty.size){ const ok = await saveToGithub(); if(!ok) return; }
+  await copyText('送出留言');
+  say('✅ 已儲存並複製「送出留言」。打開 Claude App 的 Mofuri 家用對話貼上送出即可。');
+}
+
+function refreshSend(id){
+  const box = $('sendbox'); if(box) box.outerHTML = sendBox();
+  const art = id && document.querySelector(`article[data-id="${CSS.escape(id)}"]`);
+  if(art){ const r = rev(id); const lab = art.querySelector('.sendtoggle'); if(lab){ lab.classList.toggle('on', !!r.send); lab.querySelector('input').checked = !!r.send; }
+    const sel = art.querySelector('select[data-f="decision"]'); if(sel) sel.value = r.decision || '未審核'; }
 }
 
 function renderSettings(){
@@ -316,9 +348,18 @@ document.addEventListener('input', e => {
   const t = e.target; if(!t.dataset || !t.dataset.f) return;
   const art = t.closest('article'); if(!art) return;
   setField(art.dataset.id, t.dataset.f, t.value);
+  if(t.dataset.f === 'comment' && !t.value.trim() && rev(art.dataset.id).send){ setField(art.dataset.id, 'send', false); refreshSend(art.dataset.id); say('「我要留的內容」清空了，已取消送出勾選'); }
 });
 document.addEventListener('change', e => {
   const t = e.target;
+  if(t.dataset && t.dataset.act === 'send'){
+    const art = t.closest('article'); const id = art.dataset.id; const r = rev(id);
+    if(t.checked && !(r.comment || '').trim()){ t.checked = false; say('先在「我要留的內容」填好你查核過的版本，才能勾選送出。'); return; }
+    setField(id, 'send', t.checked);
+    if(t.checked && (r.decision || '未審核') === '未審核') setField(id, 'decision', '想留言');
+    refreshSend(id); say(t.checked ? '已加入待送出清單（記得按「去送出」或「儲存到 GitHub」）' : '已從待送出清單移除');
+    return;
+  }
   if(t.id === 'rsel'){ const m = Number(S.tab); S.current[m] = S.reports[m][Number(t.value)]; show(S.tab); return; }
   if(t.matches && t.matches('select[data-f]')){
     const art = t.closest('article'); setField(art.dataset.id, t.dataset.f, t.value);
@@ -351,11 +392,12 @@ document.addEventListener('click', async e => {
   }
   else if(b.id === 'save'){ await saveToGithub(); }
   else if(b.id === 'download'){ downloadJson(); }
+  else if(b.id === 'gosend'){ await goSend(); }
 });
 
 async function saveToGithub(){
   const m = Number(S.tab);
-  if(!S.data || !S.dirty.size){ say('沒有需要儲存的變更。'); return; }
+  if(!S.data || !S.dirty.size){ say('沒有需要儲存的變更。'); return true; }
   say('儲存中…');
   try{
     const path = `${MODULES[m].dir}/查核意見/${MODULES[m].reviewFile(S.data.rid)}`;
@@ -369,7 +411,8 @@ async function saveToGithub(){
     S.dirty.clear(); store.del('mv:' + S.data.rid);
     renderReports();   // 先重畫（重畫會清掉訊息列），再顯示成功訊息，否則使用者看不到
     say('✅ 已儲存到 GitHub（' + new Date().toLocaleTimeString('zh-TW', {hour12:false}) + '）。電腦那邊 pull 就會看到；「收工」時會自動配對歸檔。');
-  }catch(e){ say('儲存失敗：' + e.message + '（內容仍暫存在這支手機）'); }
+    return true;
+  }catch(e){ say('儲存失敗：' + e.message + '（內容仍暫存在這支手機）'); return false; }
 }
 function downloadJson(){
   const m = Number(S.tab); if(!S.data) return;
